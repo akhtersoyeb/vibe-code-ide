@@ -1,0 +1,20 @@
+{
+  "name": "vibe-code-ide",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "dev:web": "bun run --filter @app/web dev",
+    "dev:api": "bun run --filter @app/api dev",
+    "build": "bun run --filter '*' build",
+    "typecheck": "bun run --filter '*' typecheck",
+    "lint": "bun run --filter '*' lint",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "prettier": "^3.6.0"
+  }
+}
