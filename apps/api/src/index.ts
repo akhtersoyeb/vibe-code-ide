@@ -1,19 +1,20 @@
+import { build } from "./app";
+
 import { validateApiEnv } from "@vibe-code-ide/shared";
-import Fastify from "fastify";
+
 
 const env = validateApiEnv(Bun.env);
 
-const app = Fastify({
-  logger: true,
-});
+const fastify = build();
 
-app.get("/health", async () => {
-  return {
-    status: "ok",
-  };
-});
+const start = async () => {
+  try {
+    const port = Number(env.PORT ?? 8080);
+    await fastify.listen({ port, host: "0.0.0.0" });
+  } catch (err) {
+    fastify.log.error(err);
+    process.exit(1);
+  }
+};
 
-await app.listen({
-  port: 3000,
-  host: "0.0.0.0",
-});
+start();

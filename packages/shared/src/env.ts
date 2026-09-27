@@ -12,10 +12,16 @@ export const webEnvSchema = z.object({
  * Environment variables required by the API.
  */
 export const apiEnvSchema = z.object({
+  CORS_ORIGIN: z.string().min(1),
+  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+
   DATABASE_URL: z.url().min(1),
   DATABASE_DIRECT_URL: z.url().min(1),
 
+
+  CLERK_PUBLISHABLE_KEY: z.string().min(1),
   CLERK_SECRET_KEY: z.string().min(1),
+  CLERK_WEBHOOK_SIGNING_SECRET: z.string().min(1),
 
   // R2_ACCOUNT_ID: z.string().min(1),
   // R2_ACCESS_KEY_ID: z.string().min(1),
