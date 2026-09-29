@@ -1,8 +1,13 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/clerk-react";
 
 export function Layout({ children }: { children: ReactNode }) {
+
+  // useEffect(() => {
+  //   window.Clerk.session.getToken()
+  // }, [window.Clerk.session]);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="flex items-center justify-between border-b bg-white px-6 py-3">

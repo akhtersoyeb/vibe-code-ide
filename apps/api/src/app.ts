@@ -4,6 +4,7 @@ import sensible from "@fastify/sensible";
 import { getAuth } from "@clerk/fastify";
 import clerkAuthPlugin from "./plugins/clerk";
 import webhookRoutes from "./routes/webhooks";
+import projectRoutes from "./routes/projects";
 import { validateApiEnv } from "@vibe-code-ide/shared";
 
 
@@ -18,11 +19,13 @@ export function build() {
   });
 
   fastify.register(cors, {
-    origin: env.CORS_ORIGIN ?? "http://localhost:5173",
+    origin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
   fastify.register(sensible);
   fastify.register(clerkAuthPlugin);
   fastify.register(webhookRoutes);
+  fastify.register(projectRoutes);
 
   fastify.get("/health", async () => ({ status: "ok" }));
 
