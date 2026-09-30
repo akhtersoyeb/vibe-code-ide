@@ -4,6 +4,7 @@ import { SignIn, SignUp } from "@clerk/clerk-react";
 import { useProjects, type Project } from "./lib/useProjects";
 import { useApi, ApiError } from "./lib/api";
 import { NewProjectModal } from "./components/NewProjectModal";
+import { ProjectWorkspace } from "./components/ProjectWorkspace";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -128,11 +129,5 @@ export function ProjectPage() {
     return <div className="p-12 text-center text-red-600">Couldn't load this project.</div>;
   }
 
-  return (
-    <div className="mx-auto max-w-4xl px-6 py-12">
-      <h1 className="text-2xl font-semibold">{project!.name}</h1>
-      <p className="mt-2 text-sm text-gray-500">Template: {project!.template}</p>
-      {/* Phase 7 replaces this with the editor + live preview workspace. */}
-    </div>
-  );
+  return <ProjectWorkspace projectId={id!} projectName={project!.name} />;
 }

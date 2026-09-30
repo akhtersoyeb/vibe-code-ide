@@ -12,6 +12,11 @@ interface CreateProjectBody {
   template?: string;
 }
 
+interface PutFilesBody {
+  baseSnapshotId: string;
+  files: Record<string, string>;
+}
+
 interface ProjectParams {
   id: string;
 }
@@ -35,6 +40,22 @@ const idParamsSchema = {
     type: "object",
     required: ["id"],
     properties: { id: { type: "string", format: "uuid" } },
+  },
+};
+
+const putFilesSchema = {
+  ...idParamsSchema,
+  body: {
+    type: "object",
+    required: ["baseSnapshotId", "files"],
+    additionalProperties: false,
+    properties: {
+      baseSnapshotId: { type: "string", format: "uuid" },
+      files: {
+        type: "object",
+        additionalProperties: { type: "string" },
+      },
+    },
   },
 };
 
@@ -69,6 +90,15 @@ async function ensureUserRow(userId: string) {
     .onConflictDoNothing({ target: schema.users.id });
 }
 
+async function findOwnedProject(projectId: string, userId: string) {
+  const [project] = await db
+    .select()
+    .from(schema.projects)
+    .where(and(eq(schema.projects.id, projectId), eq(schema.projects.ownerId, userId)))
+    .limit(1);
+  return project;
+}
+
 export default async function projectRoutes(fastify: FastifyInstance) {
   // Every route in this plugin requires a signed-in user. Runs after Clerk's
   // own preHandler, which is what populates getAuth().
@@ -101,20 +131,14 @@ export default async function projectRoutes(fastify: FastifyInstance) {
         .returning();
 
       // Seed the project with its starter template as the first snapshot,
-      // so it has real files from the moment it's created (Phase 7's
-      // WebContainer mounts exactly this).
+      // so it has real files from the moment it's created.
       await createSnapshot({
         projectId: project.id,
         files: TEMPLATES[template],
         createdBy: "system",
       });
 
-      const [seeded] = await db
-        .select()
-        .from(schema.projects)
-        .where(eq(schema.projects.id, project.id))
-        .limit(1);
-
+      const seeded = await findOwnedProject(project.id, userId);
       return reply.code(201).send(seeded);
     }
   );
@@ -124,17 +148,7 @@ export default async function projectRoutes(fastify: FastifyInstance) {
     { schema: idParamsSchema },
     async (request, reply) => {
       const userId = userIdOf(request);
-      const [project] = await db
-        .select()
-        .from(schema.projects)
-        .where(
-          and(
-            eq(schema.projects.id, request.params.id),
-            eq(schema.projects.ownerId, userId)
-          )
-        )
-        .limit(1);
-
+      const project = await findOwnedProject(request.params.id, userId);
       // Same 404 whether it doesn't exist or belongs to someone else, so
       // ids of other users' projects can't be probed.
       if (!project) return reply.notFound("Project not found");
@@ -147,21 +161,43 @@ export default async function projectRoutes(fastify: FastifyInstance) {
     { schema: idParamsSchema },
     async (request, reply) => {
       const userId = userIdOf(request);
-      const [project] = await db
-        .select()
-        .from(schema.projects)
-        .where(
-          and(
-            eq(schema.projects.id, request.params.id),
-            eq(schema.projects.ownerId, userId)
-          )
-        )
-        .limit(1);
-
+      const project = await findOwnedProject(request.params.id, userId);
       if (!project) return reply.notFound("Project not found");
-      if (!project.headSnapshotId) return {};
 
-      return resolveSnapshotFiles(project.headSnapshotId);
+      if (!project.headSnapshotId) {
+        return { snapshotId: null, files: {} };
+      }
+
+      const files = await resolveSnapshotFiles(project.headSnapshotId);
+      return { snapshotId: project.headSnapshotId, files };
+    }
+  );
+
+  fastify.put<{ Params: ProjectParams; Body: PutFilesBody }>(
+    "/api/projects/:id/files",
+    { schema: putFilesSchema },
+    async (request, reply) => {
+      const userId = userIdOf(request);
+      const project = await findOwnedProject(request.params.id, userId);
+      if (!project) return reply.notFound("Project not found");
+
+      // Optimistic concurrency: reject if the project moved on since the
+      // client last fetched it (e.g. another tab, or later, the AI agent).
+      if (project.headSnapshotId !== request.body.baseSnapshotId) {
+        return reply.code(409).send({
+          error: "Project has changed since you last loaded it",
+          headSnapshotId: project.headSnapshotId,
+        });
+      }
+
+      const snapshot = await createSnapshot({
+        projectId: project.id,
+        files: request.body.files,
+        createdBy: "user",
+        parentId: project.headSnapshotId ?? undefined,
+      });
+
+      return reply.send({ snapshotId: snapshot.id });
     }
   );
 
@@ -173,10 +209,7 @@ export default async function projectRoutes(fastify: FastifyInstance) {
       const deleted = await db
         .delete(schema.projects)
         .where(
-          and(
-            eq(schema.projects.id, request.params.id),
-            eq(schema.projects.ownerId, userId)
-          )
+          and(eq(schema.projects.id, request.params.id), eq(schema.projects.ownerId, userId))
         )
         .returning({ id: schema.projects.id });
 
