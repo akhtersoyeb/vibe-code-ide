@@ -2,8 +2,10 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { clerkClient, getAuth } from "@clerk/fastify";
 import { and, desc, eq } from "drizzle-orm";
 import { db, schema } from "../db";
+import { createSnapshot, resolveSnapshotFiles } from "../storage/snapshots";
+import { TEMPLATES } from "../storage/templates";
 
-const TEMPLATES = ["vite-react"];
+const TEMPLATE_NAMES = Object.keys(TEMPLATES);
 
 interface CreateProjectBody {
   name: string;
@@ -21,7 +23,7 @@ const createProjectSchema = {
     additionalProperties: false,
     properties: {
       name: { type: "string", minLength: 1, maxLength: 100 },
-      template: { type: "string", enum: TEMPLATES },
+      template: { type: "string", enum: TEMPLATE_NAMES },
     },
   },
 };
@@ -64,7 +66,7 @@ async function ensureUserRow(userId: string) {
   await db
     .insert(schema.users)
     .values({ id: userId, email, name })
-    .onConflictDoNothing();
+    .onConflictDoNothing({ target: schema.users.id });
 }
 
 export default async function projectRoutes(fastify: FastifyInstance) {
@@ -91,16 +93,29 @@ export default async function projectRoutes(fastify: FastifyInstance) {
 
       await ensureUserRow(userId);
 
+      const template = request.body.template ?? "vite-react";
+
       const [project] = await db
         .insert(schema.projects)
-        .values({
-          ownerId: userId,
-          name,
-          template: request.body.template ?? "vite-react",
-        })
+        .values({ ownerId: userId, name, template })
         .returning();
 
-      return reply.code(201).send(project);
+      // Seed the project with its starter template as the first snapshot,
+      // so it has real files from the moment it's created (Phase 7's
+      // WebContainer mounts exactly this).
+      await createSnapshot({
+        projectId: project.id,
+        files: TEMPLATES[template],
+        createdBy: "system",
+      });
+
+      const [seeded] = await db
+        .select()
+        .from(schema.projects)
+        .where(eq(schema.projects.id, project.id))
+        .limit(1);
+
+      return reply.code(201).send(seeded);
     }
   );
 
@@ -124,6 +139,29 @@ export default async function projectRoutes(fastify: FastifyInstance) {
       // ids of other users' projects can't be probed.
       if (!project) return reply.notFound("Project not found");
       return project;
+    }
+  );
+
+  fastify.get<{ Params: ProjectParams }>(
+    "/api/projects/:id/files",
+    { schema: idParamsSchema },
+    async (request, reply) => {
+      const userId = userIdOf(request);
+      const [project] = await db
+        .select()
+        .from(schema.projects)
+        .where(
+          and(
+            eq(schema.projects.id, request.params.id),
+            eq(schema.projects.ownerId, userId)
+          )
+        )
+        .limit(1);
+
+      if (!project) return reply.notFound("Project not found");
+      if (!project.headSnapshotId) return {};
+
+      return resolveSnapshotFiles(project.headSnapshotId);
     }
   );
 

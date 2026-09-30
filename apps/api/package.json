@@ -14,6 +14,7 @@
     "db:studio": "bunx drizzle-kit studio"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1143.0",
     "@clerk/fastify": "^3.1.82",
     "@fastify/cors": "^11.3.0",
     "@fastify/sensible": "^6.0.6",
