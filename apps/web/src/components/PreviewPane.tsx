@@ -19,7 +19,7 @@ export function PreviewPane({ url, status }: PreviewPaneProps) {
       className="h-full w-full border-0"
       // Same-origin isn't needed (and isn't available) since the preview is
       // served from a webcontainer-api.io subdomain, not our own origin.
-      sandbox="allow-scripts allow-forms allow-popups allow-modals"
+      sandbox="allow-scripts allow-forms allow-popups allow-modals allow-same-origin"
     />
   );
 }

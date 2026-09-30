@@ -13,7 +13,15 @@ export default defineConfig({
   },
   server: {
     headers: {
-      "Cross-Origin-Embedder-Policy": "require-corp",
+      "Cross-Origin-Embedder-Policy": "require-corp", // "credentialless"
+      "Cross-Origin-Opener-Policy": "same-origin",
+    },
+  },
+  // Same headers for `vite preview` (production-build testing), which uses
+  // a separate server config from dev.
+  preview: {
+    headers: {
+      "Cross-Origin-Embedder-Policy": "require-corp", // "credentialless"
       "Cross-Origin-Opener-Policy": "same-origin",
     },
   },
