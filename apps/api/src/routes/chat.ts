@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { userIdOf, findOwnedProject } from "../lib/requestContext";
-import { validateApiEnv } from "@vibe-code-ide/shared"
+import { runAgentLoop } from "../agent/loop";
+import { validateApiEnv } from '@vibe-code-ide/shared'
+
 
 const env = validateApiEnv(Bun.env)
 
@@ -8,39 +10,45 @@ interface ChatParams {
   id: string;
 }
 
-const idParamsSchema = {
+interface ChatBody {
+  message: string;
+}
+
+const chatSchema = {
   params: {
     type: "object",
     required: ["id"],
     properties: { id: { type: "string", format: "uuid" } },
   },
+  body: {
+    type: "object",
+    required: ["message"],
+    additionalProperties: false,
+    properties: {
+      message: { type: "string", minLength: 1, maxLength: 4000 },
+    },
+  },
 };
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 export default async function chatRoutes(fastify: FastifyInstance) {
   fastify.addHook("preHandler", fastify.requireAuth);
 
-  fastify.post<{ Params: ChatParams }>(
+  fastify.post<{ Params: ChatParams; Body: ChatBody }>(
     "/api/projects/:id/chat",
-    { schema: idParamsSchema },
+    { schema: chatSchema },
     async (request, reply) => {
       const userId = userIdOf(request);
       const project = await findOwnedProject(request.params.id, userId);
       if (!project) return reply.notFound("Project not found");
 
       // Hand the raw response over to us — once hijacked, Fastify won't try
-      // to send its own reply, which is required for a connection that
-      // stays open and gets written to incrementally over time.
+      // to send its own reply, and @fastify/cors's header injection is
+      // bypassed too, hence setting it by hand below.
       reply.hijack();
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
-        // Some proxies (ngrok included) buffer responses by default, which
-        // would hold every chunk back until the stream ends.
         "X-Accel-Buffering": "no",
         "Access-Control-Allow-Origin": env.CORS_ORIGIN,
         Vary: "Origin",
@@ -52,27 +60,29 @@ export default async function chatRoutes(fastify: FastifyInstance) {
       });
 
       function sendEvent(event: string, data: unknown) {
+        if (closed) return;
         reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       }
 
-      // Placeholder response, purely to prove the transport works
-      // end-to-end. Phase 9 replaces this loop with real tool-calling
-      // against the Anthropic API, streaming file_patch events instead of
-      // plain text.
-      const canned =
-        "This is a placeholder response. The real AI agent arrives in " +
-        "Phase 9 — for now this just proves the streaming pipe works.";
-
-      for (const word of canned.split(" ")) {
-        if (closed) break;
-        sendEvent("text_delta", { text: word + " " });
-        await sleep(40);
+      // Note: disconnecting doesn't currently cancel the underlying Gemini
+      // call — the loop still runs to completion server-side, its events
+      // just land nowhere. Fine for now; an AbortController wired to this
+      // close event would fix it if API cost from abandoned chats becomes
+      // a problem.
+      try {
+        await runAgentLoop({
+          projectId: project.id,
+          headSnapshotId: project.headSnapshotId,
+          userMessage: request.body.message,
+          onEvent: (event) => sendEvent(event.type, event.data),
+        });
+      } catch (err) {
+        sendEvent("error", {
+          message: err instanceof Error ? err.message : "Something went wrong",
+        });
       }
 
-      if (!closed) {
-        sendEvent("done", { snapshotId: project.headSnapshotId });
-        reply.raw.end();
-      }
+      if (!closed) reply.raw.end();
     }
   );
 }
