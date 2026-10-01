@@ -1,10 +1,10 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import sensible from "@fastify/sensible";
-import { getAuth } from "@clerk/fastify";
 import clerkAuthPlugin from "./plugins/clerk";
 import webhookRoutes from "./routes/webhooks";
 import projectRoutes from "./routes/projects";
+import chatRoutes from "./routes/chat";
 import { validateApiEnv } from "@vibe-code-ide/shared";
 
 
@@ -26,19 +26,9 @@ export function build() {
   fastify.register(clerkAuthPlugin);
   fastify.register(webhookRoutes);
   fastify.register(projectRoutes);
+  fastify.register(chatRoutes);
 
   fastify.get("/health", async () => ({ status: "ok" }));
-
-  // Example of a protected route using the requireAuth guard from
-  // src/plugins/clerk.ts — remove once real routes exist.
-  fastify.get(
-    "/api/me",
-    { preHandler: fastify.requireAuth },
-    async (request) => {
-      const { userId } = getAuth(request);
-      return { userId };
-    }
-  );
 
   return fastify;
 }

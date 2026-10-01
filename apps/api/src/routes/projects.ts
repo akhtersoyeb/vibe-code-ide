@@ -1,9 +1,10 @@
-import type { FastifyInstance, FastifyRequest } from "fastify";
-import { clerkClient, getAuth } from "@clerk/fastify";
+import type { FastifyInstance } from "fastify";
+import { clerkClient } from "@clerk/fastify";
 import { and, desc, eq } from "drizzle-orm";
 import { db, schema } from "../db";
 import { createSnapshot, resolveSnapshotFiles } from "../storage/snapshots";
 import { TEMPLATES } from "../storage/templates";
+import { userIdOf, findOwnedProject } from "../lib/requestContext";
 
 const TEMPLATE_NAMES = Object.keys(TEMPLATES);
 
@@ -59,12 +60,6 @@ const putFilesSchema = {
   },
 };
 
-function userIdOf(request: FastifyRequest): string {
-  const { userId } = getAuth(request);
-  if (!userId) throw new Error("requireAuth should have blocked this request");
-  return userId;
-}
-
 // projects.owner_id is a foreign key to users.id. Normally the Clerk webhook
 // has already created the row, but if it hasn't (account created before the
 // webhook existed, delayed delivery, ...) pull the user from Clerk directly.
@@ -88,15 +83,6 @@ async function ensureUserRow(userId: string) {
     .insert(schema.users)
     .values({ id: userId, email, name })
     .onConflictDoNothing({ target: schema.users.id });
-}
-
-async function findOwnedProject(projectId: string, userId: string) {
-  const [project] = await db
-    .select()
-    .from(schema.projects)
-    .where(and(eq(schema.projects.id, projectId), eq(schema.projects.ownerId, userId)))
-    .limit(1);
-  return project;
 }
 
 export default async function projectRoutes(fastify: FastifyInstance) {
