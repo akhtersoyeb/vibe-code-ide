@@ -1,5 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { userIdOf, findOwnedProject } from "../lib/requestContext";
+import { validateApiEnv } from "@vibe-code-ide/shared"
+
+const env = validateApiEnv(Bun.env)
 
 interface ChatParams {
   id: string;
@@ -39,6 +42,8 @@ export default async function chatRoutes(fastify: FastifyInstance) {
         // Some proxies (ngrok included) buffer responses by default, which
         // would hold every chunk back until the stream ends.
         "X-Accel-Buffering": "no",
+        "Access-Control-Allow-Origin": env.CORS_ORIGIN,
+        Vary: "Origin",
       });
 
       let closed = false;

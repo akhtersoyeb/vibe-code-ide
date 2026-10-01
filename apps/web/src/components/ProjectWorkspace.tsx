@@ -4,6 +4,7 @@ import { filesToNodes } from "../lib/fileTree";
 import { FileTree } from "./FileTree";
 import { EditorPane } from "./EditorPane";
 import { PreviewPane } from "./PreviewPane";
+import { ChatPanel } from "./ChatPanel";
 
 const STATUS_LABEL: Record<string, string> = {
   idle: "Starting…",
@@ -43,7 +44,7 @@ export function ProjectWorkspace({
         </span>
       </div>
 
-      <div className="grid flex-1 grid-cols-[200px_1fr_1fr] overflow-hidden">
+      <div className="grid flex-1 grid-cols-[200px_1fr_1fr_320px] overflow-hidden">
         <div className="overflow-y-auto border-r bg-gray-50 p-2">
           <FileTree nodes={nodes} selectedPath={selectedPath} onSelect={setSelectedPath} />
         </div>
@@ -56,8 +57,12 @@ export function ProjectWorkspace({
           />
         </div>
 
-        <div className="overflow-hidden">
+        <div className="overflow-hidden border-r">
           <PreviewPane url={previewUrl} status={status} />
+        </div>
+
+        <div className="overflow-hidden">
+          <ChatPanel projectId={projectId} />
         </div>
       </div>
     </div>
