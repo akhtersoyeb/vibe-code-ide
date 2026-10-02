@@ -22,7 +22,16 @@ export function ProjectWorkspace({
   projectId: string;
   projectName: string;
 }) {
-  const { status, previewUrl, files, error, writeFile } = useWebContainer(projectId);
+  const {
+    status,
+    previewUrl,
+    files,
+    error,
+    conflicts,
+    writeFile,
+    applyPatch,
+    syncSnapshotId,
+  } = useWebContainer(projectId);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
   const nodes = useMemo(() => filesToNodes(files), [files]);
@@ -34,6 +43,8 @@ export function ProjectWorkspace({
     const preferred = Object.keys(files).find((p) => p.endsWith("App.jsx"));
     setSelectedPath(preferred ?? Object.keys(files)[0]);
   }, [files, selectedPath]);
+
+  const selectedHasConflict = selectedPath !== null && conflicts.has(selectedPath);
 
   return (
     <div className="flex h-[calc(100vh-57px)] flex-col">
@@ -49,12 +60,25 @@ export function ProjectWorkspace({
           <FileTree nodes={nodes} selectedPath={selectedPath} onSelect={setSelectedPath} />
         </div>
 
-        <div className="overflow-hidden border-r">
-          <EditorPane
-            path={selectedPath}
-            content={selectedPath ? files[selectedPath] ?? "" : ""}
-            onChange={(content) => selectedPath && writeFile(selectedPath, content)}
-          />
+        <div className="flex flex-1 flex-col overflow-hidden border-r">
+          {selectedHasConflict && (
+            <div className="flex items-center justify-between bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
+              <span>The AI changed this file while you were editing it.</span>
+              <button
+                onClick={() => window.location.reload()}
+                className="font-medium underline"
+              >
+                Reload to see its version
+              </button>
+            </div>
+          )}
+          <div className="flex-1 overflow-hidden">
+            <EditorPane
+              path={selectedPath}
+              content={selectedPath ? files[selectedPath] ?? "" : ""}
+              onChange={(content) => selectedPath && writeFile(selectedPath, content)}
+            />
+          </div>
         </div>
 
         <div className="overflow-hidden border-r">
@@ -62,7 +86,7 @@ export function ProjectWorkspace({
         </div>
 
         <div className="overflow-hidden">
-          <ChatPanel projectId={projectId} />
+          <ChatPanel projectId={projectId} onFilePatch={applyPatch} onDone={syncSnapshotId} />
         </div>
       </div>
     </div>

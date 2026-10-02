@@ -8,7 +8,13 @@ interface ChatMessage {
   content: string;
 }
 
-export function ChatPanel({ projectId }: { projectId: string }) {
+interface ChatPanelProps {
+  projectId: string;
+  onFilePatch: (path: string, op: "write" | "delete", content?: string) => void;
+  onDone: (snapshotId: string | null) => void;
+}
+
+export function ChatPanel({ projectId, onFilePatch, onDone }: ChatPanelProps) {
   const { send } = useChatStream(projectId);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -36,12 +42,24 @@ export function ChatPanel({ projectId }: { projectId: string }) {
             next[next.length - 1] = { ...last, content: last.content + chunk };
             return next;
           });
+        } else if (event === "file_patch") {
+          const { path, op, content } = data as {
+            path: string;
+            op: "write" | "delete";
+            content?: string;
+          };
+          onFilePatch(path, op, content);
+        } else if (event === "done") {
+          const { snapshotId } = data as { snapshotId: string | null };
+          onDone(snapshotId);
+        } else if (event === "error") {
+          const { message } = data as { message: string };
+          setMessages((prev) => {
+            const next = [...prev];
+            next[next.length - 1] = { role: "assistant", content: `⚠️ ${message}` };
+            return next;
+          });
         }
-        // "file_patch" events are already arriving here — the agent really
-        // is editing files — but applying them live to the running
-        // WebContainer is Phase 10's job. For now the change is only
-        // visible after refreshing the page. "done" and "error" are also
-        // received but unused until then.
       });
     } catch {
       setMessages((prev) => [

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { WebContainer } from "@webcontainer/api";
+import type { WebContainer } from "@webcontainer/api";
+import { WebContainer as WebContainerClass } from "@webcontainer/api";
 import { useApi, ApiError } from "./api";
 import { filesToTree } from "./fileTree";
 
@@ -17,12 +18,25 @@ export type RuntimeStatus =
 // instance instead of trying to boot a second one.
 let containerPromise: Promise<WebContainer> | null = null;
 function getContainer(): Promise<WebContainer> {
-  if (!containerPromise) containerPromise = WebContainer.boot();
+  // Must match the Cross-Origin-Embedder-Policy header value set in
+  // vite.config.ts (server.headers / preview.headers) — the two are
+  // negotiating the same cross-origin isolation mode from two ends.
+  if (!containerPromise) {
+    containerPromise = WebContainerClass.boot({ coep: "credentialless" });
+  }
   return containerPromise;
 }
 
 function toAbsolute(path: string): string {
   return path.startsWith("/") ? path : `/${path}`;
+}
+
+async function ensureDir(container: WebContainer, filePath: string) {
+  const dir = filePath.split("/").slice(0, -1).join("/");
+  if (!dir) return;
+  // The agent can create a file in a directory that doesn't exist in the
+  // container yet (fs.writeFile won't create parent dirs on its own).
+  await container.fs.mkdir(toAbsolute(dir), { recursive: true }).catch(() => { });
 }
 
 const SYNC_DEBOUNCE_MS = 1000;
@@ -34,10 +48,12 @@ export function useWebContainer(projectId: string) {
   const [logs, setLogs] = useState<string[]>([]);
   const [files, setFiles] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [conflicts, setConflicts] = useState<Set<string>>(new Set());
 
   const containerRef = useRef<WebContainer | null>(null);
   const snapshotIdRef = useRef<string | null>(null);
   const filesRef = useRef<Record<string, string>>({});
+  const dirtyPathsRef = useRef<Set<string>>(new Set());
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -122,12 +138,12 @@ export function useWebContainer(projectId: string) {
           }
         );
         snapshotIdRef.current = snapshotId;
+        // Whole-manifest sync succeeded, so everything typed before this
+        // point is now reflected server-side — safe to apply live patches
+        // to any of it again.
+        dirtyPathsRef.current.clear();
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
-          // Something else (another tab, later: the AI agent) moved the
-          // project's head snapshot forward. Real merge handling lands
-          // with Phase 9/10 — for now, surface it and stop auto-syncing
-          // until the user reloads.
           setError("This project changed elsewhere — reload to see the latest.");
         } else {
           setError("Failed to save your changes");
@@ -136,9 +152,12 @@ export function useWebContainer(projectId: string) {
     }, SYNC_DEBOUNCE_MS);
   }
 
+  /** User-driven edit from the Monaco editor. */
   async function writeFile(path: string, content: string) {
     const container = containerRef.current;
     if (!container) return;
+
+    dirtyPathsRef.current.add(path);
 
     await container.fs.writeFile(toAbsolute(path), content);
     filesRef.current = { ...filesRef.current, [path]: content };
@@ -146,5 +165,58 @@ export function useWebContainer(projectId: string) {
     scheduleSync();
   }
 
-  return { status, previewUrl, files, logs, error, writeFile };
+  /**
+   * Agent-driven change arriving over SSE. Unlike writeFile(), this does
+   * NOT call scheduleSync() — the agent's change is already persisted
+   * server-side as part of its own snapshot, so echoing it back with a PUT
+   * would be redundant (and would race the snapshot id update below).
+   */
+  async function applyPatch(path: string, op: "write" | "delete", content?: string) {
+    if (dirtyPathsRef.current.has(path)) {
+      // The user has unsynced local edits to this exact file. Overwriting
+      // it would silently destroy their in-progress typing; dropping the
+      // agent's change silently would leave the project inconsistent.
+      // Flag it instead and let a reload reconcile once it's safe.
+      setConflicts((prev) => new Set(prev).add(path));
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    if (op === "delete") {
+      await container.fs.rm(toAbsolute(path)).catch(() => { });
+      const next = { ...filesRef.current };
+      delete next[path];
+      filesRef.current = next;
+      setFiles(next);
+    } else {
+      await ensureDir(container, path);
+      await container.fs.writeFile(toAbsolute(path), content ?? "");
+      filesRef.current = { ...filesRef.current, [path]: content ?? "" };
+      setFiles(filesRef.current);
+    }
+  }
+
+  /**
+   * Call once an agent turn's "done" event arrives. Without this, the
+   * project's real head snapshot moves forward on the server every time
+   * the agent finishes, but this tab's tracked id wouldn't — so the next
+   * manual edit's optimistic-concurrency check would always 409.
+   */
+  function syncSnapshotId(id: string | null) {
+    if (id) snapshotIdRef.current = id;
+  }
+
+  return {
+    status,
+    previewUrl,
+    files,
+    logs,
+    error,
+    conflicts,
+    writeFile,
+    applyPatch,
+    syncSnapshotId,
+  };
 }
