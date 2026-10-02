@@ -27,7 +27,7 @@ export function ChatPanel({ projectId }: { projectId: string }) {
     setStreaming(true);
 
     try {
-      await send(({ event, data }) => {
+      await send(text, ({ event, data }) => {
         if (event === "text_delta") {
           const { text: chunk } = data as { text: string };
           setMessages((prev) => {
@@ -37,8 +37,11 @@ export function ChatPanel({ projectId }: { projectId: string }) {
             return next;
           });
         }
-        // "done" is received but unused for now — Phase 9 uses it (and new
-        // event types like file_patch) to apply changes and refresh state.
+        // "file_patch" events are already arriving here — the agent really
+        // is editing files — but applying them live to the running
+        // WebContainer is Phase 10's job. For now the change is only
+        // visible after refreshing the page. "done" and "error" are also
+        // received but unused until then.
       });
     } catch {
       setMessages((prev) => [

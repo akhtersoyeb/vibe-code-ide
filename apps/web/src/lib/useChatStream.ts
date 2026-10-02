@@ -1,7 +1,11 @@
 import { useCallback, useRef } from "react";
 import { useAuth } from "@clerk/clerk-react";
+import { validateWebEnv } from '@vibe-code-ide/shared'
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+
+const env = validateWebEnv(import.meta.env)
+
+const API_URL = env.VITE_API_BASE_URL;
 
 interface SseEvent {
   event: string;
@@ -19,7 +23,7 @@ export function useChatStream(projectId: string) {
   const abortRef = useRef<AbortController | null>(null);
 
   const send = useCallback(
-    async (onEvent: (e: SseEvent) => void) => {
+    async (message: string, onEvent: (e: SseEvent) => void) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -27,7 +31,11 @@ export function useChatStream(projectId: string) {
       const token = await getToken();
       const res = await fetch(`${API_URL}/api/projects/${projectId}/chat`, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ message }),
         signal: controller.signal,
       });
 
