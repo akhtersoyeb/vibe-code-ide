@@ -18,6 +18,10 @@ interface PutFilesBody {
   files: Record<string, string>;
 }
 
+interface RevertBody {
+  snapshotId: string;
+}
+
 interface ProjectParams {
   id: string;
 }
@@ -56,6 +60,18 @@ const putFilesSchema = {
         type: "object",
         additionalProperties: { type: "string" },
       },
+    },
+  },
+};
+
+const revertSchema = {
+  ...idParamsSchema,
+  body: {
+    type: "object",
+    required: ["snapshotId"],
+    additionalProperties: false,
+    properties: {
+      snapshotId: { type: "string", format: "uuid" },
     },
   },
 };
@@ -179,6 +195,64 @@ export default async function projectRoutes(fastify: FastifyInstance) {
       const snapshot = await createSnapshot({
         projectId: project.id,
         files: request.body.files,
+        createdBy: "user",
+        parentId: project.headSnapshotId ?? undefined,
+      });
+
+      return reply.send({ snapshotId: snapshot.id });
+    }
+  );
+
+  fastify.get<{ Params: ProjectParams }>(
+    "/api/projects/:id/snapshots",
+    { schema: idParamsSchema },
+    async (request, reply) => {
+      const userId = userIdOf(request);
+      const project = await findOwnedProject(request.params.id, userId);
+      if (!project) return reply.notFound("Project not found");
+
+      return db
+        .select({
+          id: schema.snapshots.id,
+          parentId: schema.snapshots.parentId,
+          createdBy: schema.snapshots.createdBy,
+          createdAt: schema.snapshots.createdAt,
+        })
+        .from(schema.snapshots)
+        .where(eq(schema.snapshots.projectId, project.id))
+        .orderBy(desc(schema.snapshots.createdAt));
+    }
+  );
+
+  fastify.post<{ Params: ProjectParams; Body: RevertBody }>(
+    "/api/projects/:id/revert",
+    { schema: revertSchema },
+    async (request, reply) => {
+      const userId = userIdOf(request);
+      const project = await findOwnedProject(request.params.id, userId);
+      if (!project) return reply.notFound("Project not found");
+
+      const [target] = await db
+        .select({ id: schema.snapshots.id, projectId: schema.snapshots.projectId })
+        .from(schema.snapshots)
+        .where(eq(schema.snapshots.id, request.body.snapshotId))
+        .limit(1);
+
+      // Confirms the snapshot being reverted to actually belongs to this
+      // project — otherwise a snapshot id from a different project could
+      // be used to pull its files into this one.
+      if (!target || target.projectId !== project.id) {
+        return reply.notFound("Snapshot not found");
+      }
+
+      const files = await resolveSnapshotFiles(target.id);
+
+      // A revert creates a NEW snapshot carrying the old content forward,
+      // rather than rewinding head_snapshot_id — history stays linear and
+      // nothing already recorded is destroyed.
+      const snapshot = await createSnapshot({
+        projectId: project.id,
+        files,
         createdBy: "user",
         parentId: project.headSnapshotId ?? undefined,
       });

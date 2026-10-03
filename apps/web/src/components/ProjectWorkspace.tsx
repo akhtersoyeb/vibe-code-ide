@@ -5,6 +5,7 @@ import { FileTree } from "./FileTree";
 import { EditorPane } from "./EditorPane";
 import { PreviewPane } from "./PreviewPane";
 import { ChatPanel } from "./ChatPanel";
+import { HistoryPanel } from "./HistoryPanel";
 
 const STATUS_LABEL: Record<string, string> = {
   idle: "Starting…",
@@ -28,9 +29,11 @@ export function ProjectWorkspace({
     files,
     error,
     conflicts,
+    currentSnapshotId,
     writeFile,
     applyPatch,
     syncSnapshotId,
+    reloadFiles,
   } = useWebContainer(projectId);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
@@ -50,9 +53,16 @@ export function ProjectWorkspace({
     <div className="flex h-[calc(100vh-57px)] flex-col">
       <div className="flex items-center justify-between border-b bg-white px-4 py-2">
         <span className="text-sm font-medium">{projectName}</span>
-        <span className={`text-xs ${status === "error" ? "text-red-600" : "text-gray-500"}`}>
-          {error ?? STATUS_LABEL[status]}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className={`text-xs ${status === "error" ? "text-red-600" : "text-gray-500"}`}>
+            {error ?? STATUS_LABEL[status]}
+          </span>
+          <HistoryPanel
+            projectId={projectId}
+            currentSnapshotId={currentSnapshotId}
+            onReverted={reloadFiles}
+          />
+        </div>
       </div>
 
       <div className="grid flex-1 grid-cols-[200px_1fr_1fr_320px] overflow-hidden">

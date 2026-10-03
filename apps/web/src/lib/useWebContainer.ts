@@ -34,8 +34,9 @@ function toAbsolute(path: string): string {
 async function ensureDir(container: WebContainer, filePath: string) {
   const dir = filePath.split("/").slice(0, -1).join("/");
   if (!dir) return;
-  // The agent can create a file in a directory that doesn't exist in the
-  // container yet (fs.writeFile won't create parent dirs on its own).
+  // A new file (from the agent, or from a revert) can land in a directory
+  // that doesn't exist in the container yet — fs.writeFile won't create
+  // parent dirs on its own.
   await container.fs.mkdir(toAbsolute(dir), { recursive: true }).catch(() => { });
 }
 
@@ -49,12 +50,22 @@ export function useWebContainer(projectId: string) {
   const [files, setFiles] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [conflicts, setConflicts] = useState<Set<string>>(new Set());
+  const [currentSnapshotId, setCurrentSnapshotId] = useState<string | null>(null);
 
   const containerRef = useRef<WebContainer | null>(null);
   const snapshotIdRef = useRef<string | null>(null);
   const filesRef = useRef<Record<string, string>>({});
   const dirtyPathsRef = useRef<Set<string>>(new Set());
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keeps the ref (used for synchronous logic, avoiding stale closures in
+  // callbacks) and the state (used for rendering, e.g. "current" in the
+  // history list) in lockstep — every place that moves the snapshot
+  // forward goes through this single setter.
+  function setSnapshotId(id: string | null) {
+    snapshotIdRef.current = id;
+    setCurrentSnapshotId(id);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -82,7 +93,7 @@ export function useWebContainer(projectId: string) {
       }>(`/api/projects/${projectId}/files`);
       if (cancelled) return;
 
-      snapshotIdRef.current = snapshotId;
+      setSnapshotId(snapshotId);
       filesRef.current = initialFiles;
       setFiles(initialFiles);
 
@@ -137,7 +148,7 @@ export function useWebContainer(projectId: string) {
             }),
           }
         );
-        snapshotIdRef.current = snapshotId;
+        setSnapshotId(snapshotId);
         // Whole-manifest sync succeeded, so everything typed before this
         // point is now reflected server-side — safe to apply live patches
         // to any of it again.
@@ -205,7 +216,49 @@ export function useWebContainer(projectId: string) {
    * manual edit's optimistic-concurrency check would always 409.
    */
   function syncSnapshotId(id: string | null) {
-    if (id) snapshotIdRef.current = id;
+    if (id) setSnapshotId(id);
+  }
+
+  /**
+   * Replaces the entire working file set in one shot — used after a
+   * revert. Unlike applyPatch(), this deliberately ignores dirty-file
+   * conflict tracking: a revert is an explicit user action that should win
+   * over any in-progress edit, not quietly skip it.
+   */
+  async function applyFullReplace(newFiles: Record<string, string>, snapshotId: string | null) {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const oldPaths = new Set(Object.keys(filesRef.current));
+    const newPaths = new Set(Object.keys(newFiles));
+
+    for (const path of oldPaths) {
+      if (!newPaths.has(path)) {
+        await container.fs.rm(toAbsolute(path)).catch(() => { });
+      }
+    }
+    for (const path of newPaths) {
+      if (filesRef.current[path] !== newFiles[path]) {
+        await ensureDir(container, path);
+        await container.fs.writeFile(toAbsolute(path), newFiles[path]);
+      }
+    }
+
+    filesRef.current = newFiles;
+    setFiles(newFiles);
+    dirtyPathsRef.current.clear();
+    setConflicts(new Set());
+    setSnapshotId(snapshotId);
+  }
+
+  /** Re-fetches the project's current files from the backend and applies
+   * them wholesale — used right after a successful revert. */
+  async function reloadFiles() {
+    const { snapshotId, files: newFiles } = await request<{
+      snapshotId: string | null;
+      files: Record<string, string>;
+    }>(`/api/projects/${projectId}/files`);
+    await applyFullReplace(newFiles, snapshotId);
   }
 
   return {
@@ -215,8 +268,10 @@ export function useWebContainer(projectId: string) {
     logs,
     error,
     conflicts,
+    currentSnapshotId,
     writeFile,
     applyPatch,
     syncSnapshotId,
+    reloadFiles,
   };
 }
