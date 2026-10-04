@@ -8,6 +8,7 @@ const env = validateWebEnv(import.meta.env)
 const API_URL = env.VITE_API_BASE_URL;
 
 
+
 interface SseEvent {
   event: string;
   data: unknown;
@@ -41,7 +42,17 @@ export function useChatStream(projectId: string) {
       });
 
       if (!res.ok || !res.body) {
-        throw new Error(`Request failed: ${res.status}`);
+        // guardTurn() on the server sends a plain JSON { error } body for
+        // every pre-stream rejection (rate limit, credits, lock) — surface
+        // that directly instead of a generic status-code message.
+        let message = `Request failed: ${res.status}`;
+        try {
+          const body = await res.json();
+          if (typeof body?.error === "string") message = body.error;
+        } catch {
+          // Body wasn't JSON (or there wasn't one) — keep the fallback.
+        }
+        throw new Error(message);
       }
 
       const reader = res.body.getReader();
@@ -96,3 +107,4 @@ export function useChatStream(projectId: string) {
 
   return { send, sendFix, stop };
 }
+

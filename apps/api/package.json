@@ -19,6 +19,8 @@
     "@fastify/cors": "^11.3.0",
     "@fastify/sensible": "^6.0.6",
     "@google/genai": "^2.25.0",
+    "@upstash/ratelimit": "^2.2.0",
+    "@upstash/redis": "^1.39.0",
     "@vibe-code-ide/shared": "workspace:*",
     "dotenv": "^18.0.4",
     "drizzle-orm": "^0.45.3",

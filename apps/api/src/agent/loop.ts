@@ -6,6 +6,7 @@ import { createSnapshot, resolveSnapshotFiles } from "../storage/snapshots";
 import { toolDeclarations, runTool, type ToolContext } from "./tools";
 import { SYSTEM_INSTRUCTION, loadHistory } from "./context";
 import { validateApiEnv } from '@vibe-code-ide/shared'
+import { debitCredits, tokensToCredits } from "../billing/ledger";
 
 
 const env = validateApiEnv(Bun.env)
@@ -15,7 +16,7 @@ const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 // An alias that always points at the current flash model, so this doesn't
 // go stale as Google ships new versions. Pin an exact version instead if
 // you need reproducible behavior.
-const MODEL = "gemini-3-flash-preview";
+const MODEL = "gemini-flash-latest";
 
 const DEFAULT_MAX_ITERATIONS = 15;
 
@@ -27,8 +28,12 @@ export type AgentEvent =
 
 interface RunAgentLoopParams {
   projectId: string;
+  userId: string;
   headSnapshotId: string | null;
   userMessage: string;
+  /** Just a label for the usage_ledger row ("chat" vs "fix") — doesn't
+   * affect how the loop runs. */
+  reason: string;
   onEvent: (event: AgentEvent) => void;
   /** Overridden to a tighter cap (e.g. 3) for the auto-fix endpoint, which
    * should fail fast rather than wander for 15 rounds on a bug it can't
@@ -53,10 +58,29 @@ async function emitTyped(text: string, onEvent: (e: AgentEvent) => void) {
   }
 }
 
+async function billForTurn(
+  userId: string,
+  projectId: string,
+  totalTokens: number,
+  reason: string
+) {
+  if (totalTokens <= 0) return;
+  try {
+    await debitCredits(userId, projectId, tokensToCredits(totalTokens), reason);
+  } catch (err) {
+    // A billing hiccup shouldn't mask the agent's actual result — the
+    // user still gets their response either way, this just means the
+    // ledger under-counts this one turn.
+    console.error("debitCredits failed", err);
+  }
+}
+
 export async function runAgentLoop({
   projectId,
+  userId,
   headSnapshotId,
   userMessage,
+  reason,
   onEvent,
   maxIterations = DEFAULT_MAX_ITERATIONS,
 }: RunAgentLoopParams): Promise<void> {
@@ -70,6 +94,7 @@ export async function runAgentLoop({
 
   const files = headSnapshotId ? await resolveSnapshotFiles(headSnapshotId) : {};
   let filesChanged = false;
+  let totalTokens = 0;
 
   const toolCtx: ToolContext = {
     files,
@@ -93,6 +118,8 @@ export async function runAgentLoop({
           toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
         },
       });
+
+      totalTokens += response.usageMetadata?.totalTokenCount ?? 0;
 
       const modelContent = response.candidates?.[0]?.content;
       if (!modelContent) throw new Error("Gemini returned an empty response");
@@ -149,12 +176,17 @@ export async function runAgentLoop({
       }
     }
   } catch (err) {
+    // Gemini already consumed quota for whatever rounds ran before the
+    // failure, so bill for those even though this turn didn't finish.
+    await billForTurn(userId, projectId, totalTokens, reason);
     onEvent({
       type: "error",
       data: { message: err instanceof Error ? err.message : "The agent failed unexpectedly" },
     });
     return;
   }
+
+  await billForTurn(userId, projectId, totalTokens, reason);
 
   const [assistantMessage] = await db
     .insert(schema.messages)

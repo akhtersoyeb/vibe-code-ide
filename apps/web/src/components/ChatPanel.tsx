@@ -79,10 +79,14 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
     setStreaming(true);
     try {
       await stream((e) => handleEvent(e.event, e.data));
-    } catch {
+    } catch (err) {
+      // Pre-stream rejections (rate limit, out of credits, project already
+      // running) throw here with a specific message rather than arriving
+      // as an "error" SSE event — surface it the same way either way.
+      const content = err instanceof Error ? err.message : "Something went wrong.";
       setMessages((prev) => {
         const next = [...prev];
-        next[next.length - 1] = { role: "assistant", content: "Something went wrong." };
+        next[next.length - 1] = { role: "assistant", content };
         return next;
       });
     } finally {

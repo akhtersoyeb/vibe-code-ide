@@ -29,8 +29,8 @@ export const apiEnvSchema = z.object({
   AWS_REGION: z.string().min(1),
   AWS_BUCKET_NAME: z.string().min(1),
 
-  // UPSTASH_REDIS_REST_URL: z.url(),
-  // UPSTASH_REDIS_REST_TOKEN: z.string().min(1),
+  UPSTASH_REDIS_REST_URL: z.url(),
+  UPSTASH_REDIS_REST_TOKEN: z.string().min(1),
 
   GEMINI_API_KEY: z.string().min(1),
 });
