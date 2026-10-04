@@ -7,40 +7,41 @@ const env = validateWebEnv(import.meta.env)
 
 const API_URL = env.VITE_API_BASE_URL;
 
+
 interface SseEvent {
   event: string;
   data: unknown;
 }
 
 /**
- * Posts to a project's chat endpoint and parses the Server-Sent Events
- * response by hand. The browser's built-in EventSource can't be used here —
- * it only supports GET requests with no custom headers, and this needs a
- * POST carrying an Authorization bearer token.
+ * Posts to one of a project's SSE endpoints (chat or auto-fix) and parses
+ * the response by hand. The browser's built-in EventSource can't be used
+ * here — it only supports GET requests with no custom headers, and these
+ * need a POST carrying an Authorization bearer token.
  */
 export function useChatStream(projectId: string) {
   const { getToken } = useAuth();
   const abortRef = useRef<AbortController | null>(null);
 
-  const send = useCallback(
-    async (message: string, onEvent: (e: SseEvent) => void) => {
+  const postSse = useCallback(
+    async (path: string, body: unknown, onEvent: (e: SseEvent) => void) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
       const token = await getToken();
-      const res = await fetch(`${API_URL}/api/projects/${projectId}/chat`, {
+      const res = await fetch(`${API_URL}${path}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
       if (!res.ok || !res.body) {
-        throw new Error(`Chat request failed: ${res.status}`);
+        throw new Error(`Request failed: ${res.status}`);
       }
 
       const reader = res.body.getReader();
@@ -74,12 +75,24 @@ export function useChatStream(projectId: string) {
         }
       }
     },
-    [projectId, getToken]
+    [getToken]
+  );
+
+  const send = useCallback(
+    (message: string, onEvent: (e: SseEvent) => void) =>
+      postSse(`/api/projects/${projectId}/chat`, { message }, onEvent),
+    [projectId, postSse]
+  );
+
+  const sendFix = useCallback(
+    (error: string, onEvent: (e: SseEvent) => void) =>
+      postSse(`/api/projects/${projectId}/chat/fix`, { error }, onEvent),
+    [projectId, postSse]
   );
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
   }, []);
 
-  return { send, stop };
+  return { send, sendFix, stop };
 }

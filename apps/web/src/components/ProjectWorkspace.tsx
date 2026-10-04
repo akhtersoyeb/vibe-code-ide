@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useWebContainer } from "../lib/useWebContainer";
 import { filesToNodes } from "../lib/fileTree";
 import { FileTree } from "./FileTree";
 import { EditorPane } from "./EditorPane";
 import { PreviewPane } from "./PreviewPane";
-import { ChatPanel } from "./ChatPanel";
+import { ChatPanel, type ChatPanelHandle } from "./ChatPanel";
 import { HistoryPanel } from "./HistoryPanel";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -23,6 +23,8 @@ export function ProjectWorkspace({
   projectId: string;
   projectName: string;
 }) {
+  const [pendingError, setPendingError] = useState<string | null>(null);
+
   const {
     status,
     previewUrl,
@@ -34,8 +36,10 @@ export function ProjectWorkspace({
     applyPatch,
     syncSnapshotId,
     reloadFiles,
-  } = useWebContainer(projectId);
+  } = useWebContainer(projectId, { onBuildError: setPendingError });
+
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const chatRef = useRef<ChatPanelHandle>(null);
 
   const nodes = useMemo(() => filesToNodes(files), [files]);
 
@@ -48,6 +52,12 @@ export function ProjectWorkspace({
   }, [files, selectedPath]);
 
   const selectedHasConflict = selectedPath !== null && conflicts.has(selectedPath);
+
+  function handleFix() {
+    if (!pendingError) return;
+    chatRef.current?.triggerFix(pendingError);
+    setPendingError(null);
+  }
 
   return (
     <div className="flex h-[calc(100vh-57px)] flex-col">
@@ -91,12 +101,34 @@ export function ProjectWorkspace({
           </div>
         </div>
 
-        <div className="overflow-hidden border-r">
-          <PreviewPane url={previewUrl} status={status} />
+        <div className="flex flex-1 flex-col overflow-hidden border-r">
+          {pendingError && (
+            <div className="flex items-center justify-between bg-red-50 px-3 py-1.5 text-xs text-red-800">
+              <span className="truncate pr-2">{pendingError}</span>
+              <button onClick={handleFix} className="shrink-0 font-medium underline">
+                Fix with AI
+              </button>
+            </div>
+          )}
+          <div className="flex-1 overflow-hidden">
+            <PreviewPane url={previewUrl} status={status} onRuntimeError={setPendingError} />
+          </div>
         </div>
 
         <div className="overflow-hidden">
-          <ChatPanel projectId={projectId} onFilePatch={applyPatch} onDone={syncSnapshotId} />
+          <ChatPanel
+            ref={chatRef}
+            projectId={projectId}
+            onFilePatch={applyPatch}
+            onDone={(id) => {
+              syncSnapshotId(id);
+              // The app just got rebuilt from this turn — any error shown
+              // before it is presumably stale now, whether this was a
+              // normal turn or a fix. A new one will surface again if it's
+              // still actually broken.
+              setPendingError(null);
+            }}
+          />
         </div>
       </div>
     </div>

@@ -15,9 +15,9 @@ const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 // An alias that always points at the current flash model, so this doesn't
 // go stale as Google ships new versions. Pin an exact version instead if
 // you need reproducible behavior.
-const MODEL = "gemini-flash-latest";
+const MODEL = "gemini-3-flash-preview";
 
-const MAX_ITERATIONS = 15;
+const DEFAULT_MAX_ITERATIONS = 15;
 
 export type AgentEvent =
   | { type: "text_delta"; data: { text: string } }
@@ -30,6 +30,10 @@ interface RunAgentLoopParams {
   headSnapshotId: string | null;
   userMessage: string;
   onEvent: (event: AgentEvent) => void;
+  /** Overridden to a tighter cap (e.g. 3) for the auto-fix endpoint, which
+   * should fail fast rather than wander for 15 rounds on a bug it can't
+   * actually fix. */
+  maxIterations?: number;
 }
 
 function sleep(ms: number) {
@@ -54,6 +58,7 @@ export async function runAgentLoop({
   headSnapshotId,
   userMessage,
   onEvent,
+  maxIterations = DEFAULT_MAX_ITERATIONS,
 }: RunAgentLoopParams): Promise<void> {
   const history = await loadHistory(projectId);
 
@@ -78,7 +83,7 @@ export async function runAgentLoop({
   let finalSummary = "Done.";
 
   try {
-    for (let i = 0; i < MAX_ITERATIONS; i++) {
+    for (let i = 0; i < maxIterations; i++) {
       const response = await ai.models.generateContent({
         model: MODEL,
         contents,
@@ -139,7 +144,7 @@ export async function runAgentLoop({
 
       if (calledFinish) break;
 
-      if (i === MAX_ITERATIONS - 1) {
+      if (i === maxIterations - 1) {
         finalSummary = "Reached the step limit — here's what changed so far.";
       }
     }

@@ -42,7 +42,26 @@ async function ensureDir(container: WebContainer, filePath: string) {
 
 const SYNC_DEBOUNCE_MS = 1000;
 
-export function useWebContainer(projectId: string) {
+// The dev server's output is one merged stream (not separate stdout/
+// stderr), so there's no clean signal for "this chunk is an error" — just
+// a keyword heuristic. Approximate on purpose: it'll have false positives
+// (e.g. a library that logs the word "error" in a non-fatal message) and
+// occasional misses, but it's enough to drive an optional auto-fix
+// suggestion rather than something safety-critical.
+const ERROR_KEYWORDS = ["error", "failed to compile", "uncaught", "syntaxerror"];
+const BUILD_ERROR_DEBOUNCE_MS = 500;
+const BUILD_ERROR_CONTEXT_CHARS = 2000;
+
+export interface UseWebContainerCallbacks {
+  /** Called when the dev server's output looks like an error. Debounced
+   * and deduped — won't fire again for the same error text repeatedly. */
+  onBuildError?: (message: string) => void;
+}
+
+export function useWebContainer(
+  projectId: string,
+  { onBuildError }: UseWebContainerCallbacks = {}
+) {
   const { request } = useApi();
   const [status, setStatus] = useState<RuntimeStatus>("idle");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -57,6 +76,13 @@ export function useWebContainer(projectId: string) {
   const filesRef = useRef<Record<string, string>>({});
   const dirtyPathsRef = useRef<Set<string>>(new Set());
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const outputBufferRef = useRef("");
+  const buildErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastReportedBuildErrorRef = useRef<string | null>(null);
+  const onBuildErrorRef = useRef(onBuildError);
+  useEffect(() => {
+    onBuildErrorRef.current = onBuildError;
+  }, [onBuildError]);
 
   // Keeps the ref (used for synchronous logic, avoiding stale closures in
   // callbacks) and the state (used for rendering, e.g. "current" in the
@@ -71,7 +97,27 @@ export function useWebContainer(projectId: string) {
     let cancelled = false;
 
     function appendLog(chunk: string) {
-      if (!cancelled) setLogs((prev) => [...prev.slice(-199), chunk]);
+      if (cancelled) return;
+      setLogs((prev) => [...prev.slice(-199), chunk]);
+
+      outputBufferRef.current = (outputBufferRef.current + chunk).slice(
+        -BUILD_ERROR_CONTEXT_CHARS * 2
+      );
+
+      const looksLikeError = ERROR_KEYWORDS.some((kw) =>
+        chunk.toLowerCase().includes(kw)
+      );
+      if (!looksLikeError || !onBuildError) return;
+
+      // Debounced so a burst of related lines from one crash becomes a
+      // single report, not one per line.
+      if (buildErrorTimerRef.current) clearTimeout(buildErrorTimerRef.current);
+      buildErrorTimerRef.current = setTimeout(() => {
+        const context = outputBufferRef.current.slice(-BUILD_ERROR_CONTEXT_CHARS);
+        if (context === lastReportedBuildErrorRef.current) return; // already reported
+        lastReportedBuildErrorRef.current = context;
+        onBuildError(context);
+      }, BUILD_ERROR_DEBOUNCE_MS);
     }
 
     async function run() {

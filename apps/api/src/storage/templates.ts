@@ -28,6 +28,45 @@ export const TEMPLATES: Record<string, Record<string, string>> = {
   <head>
     <meta charset="UTF-8" />
     <title>App</title>
+    <script type="module">
+      // Forwards errors to the parent page, which is on a different origin
+      // and can't read this window's state directly. Used for the auto-fix
+      // feature — please don't remove this, and keep it type="module": that
+      // is what makes import.meta.hot available below.
+      window.addEventListener("error", function (e) {
+        window.parent.postMessage(
+          {
+            source: "preview-error-reporter",
+            message: e.message + " (" + e.filename + ":" + e.lineno + ")",
+          },
+          "*"
+        );
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        var reason = e.reason instanceof Error ? e.reason.message : String(e.reason);
+        window.parent.postMessage(
+          { source: "preview-error-reporter", message: "Unhandled promise rejection: " + reason },
+          "*"
+        );
+      });
+      // Catches compile/syntax errors too (e.g. a mismatched JSX tag) —
+      // those never produce a runtime window.onerror, since the broken
+      // module never finishes loading, let alone running. Vite reports
+      // these over its own HMR channel instead, which only a module script
+      // (not a classic <script>) can listen to.
+      if (import.meta.hot) {
+        import.meta.hot.on("vite:error", function (payload) {
+          var err = payload && payload.err;
+          window.parent.postMessage(
+            {
+              source: "preview-error-reporter",
+              message: (err && err.message) || "Build error",
+            },
+            "*"
+          );
+        });
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

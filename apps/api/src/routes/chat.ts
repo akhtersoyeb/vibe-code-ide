@@ -1,10 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { userIdOf, findOwnedProject } from "../lib/requestContext";
+import { startSse } from "../lib/sse";
 import { runAgentLoop } from "../agent/loop";
-import { validateApiEnv } from '@vibe-code-ide/shared'
-
-
-const env = validateApiEnv(Bun.env)
 
 interface ChatParams {
   id: string;
@@ -14,12 +11,20 @@ interface ChatBody {
   message: string;
 }
 
-const chatSchema = {
+interface FixBody {
+  error: string;
+}
+
+const paramsSchema = {
   params: {
     type: "object",
     required: ["id"],
     properties: { id: { type: "string", format: "uuid" } },
   },
+};
+
+const chatSchema = {
+  ...paramsSchema,
   body: {
     type: "object",
     required: ["message"],
@@ -29,6 +34,20 @@ const chatSchema = {
     },
   },
 };
+
+const fixSchema = {
+  ...paramsSchema,
+  body: {
+    type: "object",
+    required: ["error"],
+    additionalProperties: false,
+    properties: {
+      error: { type: "string", minLength: 1, maxLength: 4000 },
+    },
+  },
+};
+
+const AUTO_FIX_MAX_ITERATIONS = 3;
 
 export default async function chatRoutes(fastify: FastifyInstance) {
   fastify.addHook("preHandler", fastify.requireAuth);
@@ -41,33 +60,12 @@ export default async function chatRoutes(fastify: FastifyInstance) {
       const project = await findOwnedProject(request.params.id, userId);
       if (!project) return reply.notFound("Project not found");
 
-      // Hand the raw response over to us — once hijacked, Fastify won't try
-      // to send its own reply, and @fastify/cors's header injection is
-      // bypassed too, hence setting it by hand below.
-      reply.hijack();
-      reply.raw.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-        "Access-Control-Allow-Origin": env.CORS_ORIGIN,
-        Vary: "Origin",
-      });
-
-      let closed = false;
-      request.raw.on("close", () => {
-        closed = true;
-      });
-
-      function sendEvent(event: string, data: unknown) {
-        if (closed) return;
-        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      }
+      const { sendEvent, end } = startSse(request, reply);
 
       // Note: disconnecting doesn't currently cancel the underlying Gemini
       // call — the loop still runs to completion server-side, its events
-      // just land nowhere. Fine for now; an AbortController wired to this
-      // close event would fix it if API cost from abandoned chats becomes
+      // just land nowhere. Fine for now; an AbortController wired to the
+      // request's close event would fix it if abandoned-chat cost becomes
       // a problem.
       try {
         await runAgentLoop({
@@ -82,7 +80,42 @@ export default async function chatRoutes(fastify: FastifyInstance) {
         });
       }
 
-      if (!closed) reply.raw.end();
+      end();
+    }
+  );
+
+  fastify.post<{ Params: ChatParams; Body: FixBody }>(
+    "/api/projects/:id/chat/fix",
+    { schema: fixSchema },
+    async (request, reply) => {
+      const userId = userIdOf(request);
+      const project = await findOwnedProject(request.params.id, userId);
+      if (!project) return reply.notFound("Project not found");
+
+      const { sendEvent, end } = startSse(request, reply);
+
+      // The framing (and the tight iteration cap) live here, server-side —
+      // the client only ever has to send the raw error text.
+      const message =
+        "The app has an error. Fix it with the smallest possible change — " +
+        "don't add new features or refactor unrelated code.\n\nError:\n" +
+        request.body.error;
+
+      try {
+        await runAgentLoop({
+          projectId: project.id,
+          headSnapshotId: project.headSnapshotId,
+          userMessage: message,
+          maxIterations: AUTO_FIX_MAX_ITERATIONS,
+          onEvent: (event) => sendEvent(event.type, event.data),
+        });
+      } catch (err) {
+        sendEvent("error", {
+          message: err instanceof Error ? err.message : "Something went wrong",
+        });
+      }
+
+      end();
     }
   );
 }

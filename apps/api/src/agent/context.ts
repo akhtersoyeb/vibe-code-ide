@@ -8,7 +8,8 @@ Rules:
 - Make small, focused edits. Prefer edit_file over write_file when changing a file that already exists.
 - Call read_file before edit_file if you have not already seen that file's current contents in this conversation.
 - Keep the app using only React, Vite, and plain CSS unless the user explicitly asks for something else — call add_dependency before importing any new package.
-- Call finish only once the app should actually work, with a short, friendly summary of what changed.`;
+- Call finish only once the app should actually work, with a short, friendly summary of what changed.
+- index.html contains a script (type="module") that reports errors back to the editor. Never remove it, and never change it to a plain (non-module) script — it relies on import.meta.hot, which only works in a module script.`;
 
 interface StoredMessageContent {
   text?: string;

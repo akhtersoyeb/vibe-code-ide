@@ -1,4 +1,9 @@
-import { useState, type KeyboardEvent } from "react";
+import {
+  forwardRef,
+  useImperativeHandle,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { useChatStream } from "../lib/useChatStream";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,62 +19,94 @@ interface ChatPanelProps {
   onDone: (snapshotId: string | null) => void;
 }
 
-export function ChatPanel({ projectId, onFilePatch, onDone }: ChatPanelProps) {
-  const { send } = useChatStream(projectId);
+export interface ChatPanelHandle {
+  /** Starts an auto-fix turn against /chat/fix. Exposed via ref since the
+   * error banners that trigger this live in PreviewPane / ProjectWorkspace,
+   * outside this component — but the fix itself still shows up in the
+   * transcript like any other turn, rather than happening invisibly. */
+  triggerFix: (error: string) => void;
+}
+
+export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel(
+  { projectId, onFilePatch, onDone },
+  ref
+) {
+  const { send, sendFix } = useChatStream(projectId);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
 
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || streaming) return;
+  function handleEvent(event: string, data: unknown) {
+    if (event === "text_delta") {
+      const { text: chunk } = data as { text: string };
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        next[next.length - 1] = { ...last, content: last.content + chunk };
+        return next;
+      });
+    } else if (event === "file_patch") {
+      const { path, op, content } = data as {
+        path: string;
+        op: "write" | "delete";
+        content?: string;
+      };
+      onFilePatch(path, op, content);
+    } else if (event === "done") {
+      const { snapshotId } = data as { snapshotId: string | null };
+      onDone(snapshotId);
+    } else if (event === "error") {
+      const { message } = data as { message: string };
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { role: "assistant", content: `⚠️ ${message}` };
+        return next;
+      });
+    }
+  }
 
+  /** Shared by both a normal send and an auto-fix trigger — both are just
+   * "a user-facing label, plus a stream of events to react to". */
+  async function runTurn(
+    userLabel: string,
+    stream: (onEvent: (e: { event: string; data: unknown }) => void) => Promise<void>
+  ) {
     setMessages((prev) => [
       ...prev,
-      { role: "user", content: text },
+      { role: "user", content: userLabel },
       { role: "assistant", content: "" },
     ]);
-    setInput("");
     setStreaming(true);
-
     try {
-      await send(text, ({ event, data }) => {
-        if (event === "text_delta") {
-          const { text: chunk } = data as { text: string };
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            next[next.length - 1] = { ...last, content: last.content + chunk };
-            return next;
-          });
-        } else if (event === "file_patch") {
-          const { path, op, content } = data as {
-            path: string;
-            op: "write" | "delete";
-            content?: string;
-          };
-          onFilePatch(path, op, content);
-        } else if (event === "done") {
-          const { snapshotId } = data as { snapshotId: string | null };
-          onDone(snapshotId);
-        } else if (event === "error") {
-          const { message } = data as { message: string };
-          setMessages((prev) => {
-            const next = [...prev];
-            next[next.length - 1] = { role: "assistant", content: `⚠️ ${message}` };
-            return next;
-          });
-        }
-      });
+      await stream((e) => handleEvent(e.event, e.data));
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "Something went wrong sending that." },
-      ]);
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { role: "assistant", content: "Something went wrong." };
+        return next;
+      });
     } finally {
       setStreaming(false);
     }
   }
+
+  async function handleSend() {
+    const text = input.trim();
+    if (!text || streaming) return;
+    setInput("");
+    await runTurn(text, (onEvent) => send(text, onEvent));
+  }
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      triggerFix(error: string) {
+        if (streaming) return;
+        runTurn("🔧 Fix the error in the running app", (onEvent) => sendFix(error, onEvent));
+      },
+    }),
+    [streaming, sendFix]
+  );
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -109,4 +146,4 @@ export function ChatPanel({ projectId, onFilePatch, onDone }: ChatPanelProps) {
       </div>
     </div>
   );
-}
+});
