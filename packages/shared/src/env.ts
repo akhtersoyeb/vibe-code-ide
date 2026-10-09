@@ -32,6 +32,8 @@ export const apiEnvSchema = z.object({
   UPSTASH_REDIS_REST_URL: z.url(),
   UPSTASH_REDIS_REST_TOKEN: z.string().min(1),
 
+  VERCEL_TOKEN: z.string().min(1),
+
   GEMINI_API_KEY: z.string().min(1),
 });
 

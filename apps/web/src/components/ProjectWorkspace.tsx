@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useWebContainer } from "../lib/useWebContainer";
+import { useApi, ApiError } from "../lib/api";
+import { useExport } from "../lib/useExport";
 import { filesToNodes } from "../lib/fileTree";
 import { FileTree } from "./FileTree";
 import { EditorPane } from "./EditorPane";
 import { PreviewPane } from "./PreviewPane";
 import { ChatPanel, type ChatPanelHandle } from "./ChatPanel";
 import { HistoryPanel } from "./HistoryPanel";
+import { Button } from "@/components/ui/button";
 
 const STATUS_LABEL: Record<string, string> = {
   idle: "Starting…",
@@ -19,11 +22,20 @@ const STATUS_LABEL: Record<string, string> = {
 export function ProjectWorkspace({
   projectId,
   projectName,
+  initialDeployedUrl,
 }: {
   projectId: string;
   projectName: string;
+  initialDeployedUrl?: string | null;
 }) {
   const [pendingError, setPendingError] = useState<string | null>(null);
+  const [deployedUrl, setDeployedUrl] = useState<string | null>(initialDeployedUrl ?? null);
+  const [deploying, setDeploying] = useState(false);
+  const [deployError, setDeployError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+
+  const { request } = useApi();
+  const { downloadExport } = useExport(projectId);
 
   const {
     status,
@@ -59,6 +71,34 @@ export function ProjectWorkspace({
     setPendingError(null);
   }
 
+  async function handleExport() {
+    setExporting(true);
+    try {
+      await downloadExport(projectName);
+    } catch {
+      // Export failing isn't disruptive enough to warrant a banner — the
+      // user can just try again.
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleDeploy() {
+    setDeploying(true);
+    setDeployError(null);
+    try {
+      const result = await request<{ deployedUrl: string }>(
+        `/api/projects/${projectId}/deploy`,
+        { method: "POST" }
+      );
+      setDeployedUrl(result.deployedUrl);
+    } catch (err) {
+      setDeployError(err instanceof ApiError ? err.message : "Deploy failed");
+    } finally {
+      setDeploying(false);
+    }
+  }
+
   return (
     <div className="flex h-[calc(100vh-57px)] flex-col">
       <div className="flex items-center justify-between border-b bg-white px-4 py-2">
@@ -72,8 +112,27 @@ export function ProjectWorkspace({
             currentSnapshotId={currentSnapshotId}
             onReverted={reloadFiles}
           />
+          <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
+            {exporting ? "Exporting…" : "Export"}
+          </Button>
+          {deployedUrl && (
+            <a
+              href={deployedUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-blue-600 underline"
+            >
+              {deployedUrl.replace(/^https?:\/\//, "")}
+            </a>
+          )}
+          <Button size="sm" onClick={handleDeploy} disabled={deploying}>
+            {deploying ? "Deploying…" : deployedUrl ? "Redeploy" : "Deploy"}
+          </Button>
         </div>
       </div>
+      {deployError && (
+        <div className="bg-red-50 px-4 py-1 text-xs text-red-700">{deployError}</div>
+      )}
 
       <div className="grid flex-1 grid-cols-[200px_1fr_1fr_320px] overflow-hidden">
         <div className="overflow-y-auto border-r bg-gray-50 p-2">

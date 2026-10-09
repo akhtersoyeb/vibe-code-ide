@@ -5,6 +5,9 @@ import { db, schema } from "../db";
 import { createSnapshot, resolveSnapshotFiles } from "../storage/snapshots";
 import { TEMPLATES } from "../storage/templates";
 import { userIdOf, findOwnedProject } from "../lib/requestContext";
+import { slugify } from "../lib/slugify";
+import { deployToVercel } from "../deploy/vercel";
+import { ZipArchive } from "archiver";
 
 const TEMPLATE_NAMES = Object.keys(TEMPLATES);
 
@@ -258,6 +261,66 @@ export default async function projectRoutes(fastify: FastifyInstance) {
       });
 
       return reply.send({ snapshotId: snapshot.id });
+    }
+  );
+
+  fastify.get<{ Params: ProjectParams }>(
+    "/api/projects/:id/export",
+    { schema: idParamsSchema },
+    async (request, reply) => {
+      const userId = userIdOf(request);
+      const project = await findOwnedProject(request.params.id, userId);
+      if (!project) return reply.notFound("Project not found");
+      if (!project.headSnapshotId) return reply.badRequest("Project has no files yet");
+
+      const files = await resolveSnapshotFiles(project.headSnapshotId);
+
+      reply.header("Content-Type", "application/zip");
+      reply.header(
+        "Content-Disposition",
+        `attachment; filename="${slugify(project.name)}.zip"`
+      );
+
+      const archive = new ZipArchive({
+        zlib: { level: 9 }, // Sets the compression level.
+      });
+      // archiver is itself a readable stream — handing it to send() lets
+      // Fastify start forwarding bytes as they're produced below, rather
+      // than buffering the whole zip in memory first.
+      reply.send(archive);
+
+      for (const [path, content] of Object.entries(files)) {
+        archive.append(content, { name: path });
+      }
+      await archive.finalize();
+    }
+  );
+
+  fastify.post<{ Params: ProjectParams }>(
+    "/api/projects/:id/deploy",
+    { schema: idParamsSchema },
+    async (request, reply) => {
+      const userId = userIdOf(request);
+      const project = await findOwnedProject(request.params.id, userId);
+      if (!project) return reply.notFound("Project not found");
+      if (!project.headSnapshotId) return reply.badRequest("Project has no files yet");
+
+      const files = await resolveSnapshotFiles(project.headSnapshotId);
+
+      let deployedUrl: string;
+      try {
+        deployedUrl = await deployToVercel(project.name, files);
+      } catch (err) {
+        request.log.error(err, "vercel deploy failed");
+        return reply.code(502).send({ error: "Deploy failed — please try again" });
+      }
+
+      await db
+        .update(schema.projects)
+        .set({ deployedUrl, updatedAt: new Date() })
+        .where(eq(schema.projects.id, project.id));
+
+      return reply.send({ deployedUrl });
     }
   );
 

@@ -129,5 +129,11 @@ export function ProjectPage() {
     return <div className="p-12 text-center text-red-600">Couldn't load this project.</div>;
   }
 
-  return <ProjectWorkspace projectId={id!} projectName={project!.name} />;
+  return (
+    <ProjectWorkspace
+      projectId={id!}
+      projectName={project!.name}
+      initialDeployedUrl={project!.deployedUrl}
+    />
+  );
 }
