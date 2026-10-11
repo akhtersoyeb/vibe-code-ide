@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "build": "tsc",
-    "start": "bun dist/index.js",
+    "start": "bun src/index.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "db:generate": "bunx drizzle-kit generate",
