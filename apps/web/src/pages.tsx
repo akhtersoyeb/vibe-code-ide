@@ -8,16 +8,7 @@ import { ProjectWorkspace } from "./components/ProjectWorkspace";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-export function Landing() {
-  return (
-    <div className="mx-auto max-w-2xl px-6 py-24 text-center">
-      <h1 className="text-4xl font-bold">Build web apps by chatting with AI</h1>
-      <p className="mt-4 text-gray-600">
-        Describe what you want and watch it appear, live, in the browser.
-      </p>
-    </div>
-  );
-}
+export { Landing } from "./pages/Landing";
 
 export function SignInPage() {
   return (
